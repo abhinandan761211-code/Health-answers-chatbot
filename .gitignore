@@ -2,26 +2,47 @@
 __pycache__/
 *.py[cod]
 *$py.class
+.Python
+*.egg-info/
+build/
+dist/
 
 # Virtual environments
 .venv/
 venv/
 env/
+.tox/
+.nox/
 
 # Streamlit
 .streamlit/secrets.toml
 
+# Persistent vector database
+chroma_db/
+
 # Test and tooling caches
 .pytest_cache/
+.hypothesis/
 .mypy_cache/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Locally downloaded model/cache files (when configured inside the project)
+/.cache/huggingface/
+/.cache/torch/
 
 # Local environment variables
 .env
 .env.*
 !.env.example
 
+# Logs and temporary files
+*.log
+*.tmp
+
 # macOS
 .DS_Store
+
+# Windows
+Thumbs.db

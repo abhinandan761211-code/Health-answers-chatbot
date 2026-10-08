@@ -1,0 +1,3 @@
+# Add one HTTPS page URL per line. Only these official health domains are accepted:
+# cdc.gov, medlineplus.gov, nih.gov, who.int
+https://medlineplus.gov/healthtopics.html

@@ -29,6 +29,31 @@ class SearchResult:
     score: float
 
 
+class MedicalEntityRecognizer:
+    """Recognize known dataset diseases and common symptom/treatment terms."""
+
+    def __init__(self, records: list[QARecord]) -> None:
+        self._entity_phrases = MedicalRetriever._build_entity_phrases(records)
+
+    def recognize_entities(self, text: str) -> dict[str, list[str]]:
+        words = _tokens(text)
+        found: dict[str, set[str]] = {
+            "Disease": set(),
+            "Symptom": set(),
+            "Treatment": set(),
+        }
+        max_phrase_length = max((len(phrase) for phrase in self._entity_phrases), default=0)
+        for start in range(len(words)):
+            for end in range(start + 1, min(len(words), start + max_phrase_length) + 1):
+                phrase = words[start:end]
+                categories = self._entity_phrases.get(phrase)
+                if categories:
+                    display = " ".join(phrase)
+                    for category in categories:
+                        found[category].add(display)
+        return {category: sorted(terms) for category, terms in found.items() if terms}
+
+
 SYMPTOM_TERMS = (
     "abdominal pain", "back pain", "chest pain", "difficulty breathing",
     "shortness of breath", "sore throat", "high blood pressure", "low blood pressure",
@@ -124,7 +149,7 @@ class MedicalRetriever:
             max_features=150_000,
         )
         self.matrix = self.vectorizer.fit_transform(corpus)
-        self._entity_phrases = self._build_entity_phrases(records)
+        self._entity_recognizer = MedicalEntityRecognizer(records)
 
     def search(self, question: str, top_k: int = 3) -> list[SearchResult]:
         """Return the highest-scoring answerable records for a question."""
@@ -168,19 +193,4 @@ class MedicalRetriever:
 
     def recognize_entities(self, text: str) -> dict[str, list[str]]:
         """Find known dataset diseases and common symptom/treatment terms."""
-        words = _tokens(text)
-        found: dict[str, set[str]] = {
-            "Disease": set(),
-            "Symptom": set(),
-            "Treatment": set(),
-        }
-        max_phrase_length = max((len(phrase) for phrase in self._entity_phrases), default=0)
-        for start in range(len(words)):
-            for end in range(start + 1, min(len(words), start + max_phrase_length) + 1):
-                phrase = words[start:end]
-                categories = self._entity_phrases.get(phrase)
-                if categories:
-                    display = " ".join(phrase)
-                    for category in categories:
-                        found[category].add(display)
-        return {category: sorted(terms) for category, terms in found.items() if terms}
+        return self._entity_recognizer.recognize_entities(text)

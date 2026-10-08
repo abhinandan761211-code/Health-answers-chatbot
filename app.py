@@ -1,11 +1,21 @@
 from pathlib import Path
+import os
 
 import streamlit as st
 
-from medical_qa import MedicalRetriever, SearchResult, load_medquad
+from knowledge_base import ChromaKnowledgeBase
+from knowledge_updater import (
+    KnowledgeUpdater,
+    load_source_urls,
+    start_periodic_updates,
+)
+from medical_qa import SearchResult
 
 
-DATASET_DIR = Path(__file__).parent / "MedQuAD-master copy"
+PROJECT_DIR = Path(__file__).parent
+DATASET_DIR = PROJECT_DIR / "MedQuAD-master copy"
+CHROMA_DIR = PROJECT_DIR / "chroma_db"
+SOURCES_FILE = PROJECT_DIR / "trusted_sources.txt"
 
 st.set_page_config(
     page_title="MedQuAD Medical Q&A",
@@ -143,13 +153,27 @@ st.markdown(
 )
 
 
-@st.cache_resource(show_spinner="Loading MedQuAD and building the search index...")
-def get_retriever() -> MedicalRetriever:
-    return MedicalRetriever(load_medquad(DATASET_DIR))
+@st.cache_resource(show_spinner="Loading MedQuAD and the medical vector database...")
+def get_knowledge_base() -> ChromaKnowledgeBase:
+    return ChromaKnowledgeBase(DATASET_DIR, CHROMA_DIR)
+
+
+@st.cache_resource
+def get_updater() -> KnowledgeUpdater:
+    return KnowledgeUpdater(get_knowledge_base(), load_source_urls(SOURCES_FILE))
+
+
+@st.cache_resource
+def start_source_scheduler() -> object | None:
+    updater = get_updater()
+    if not updater.source_urls:
+        return None
+    interval_hours = int(os.environ.get("UPDATE_INTERVAL_HOURS", "24"))
+    return start_periodic_updates(updater, interval_hours)
 
 
 def render_results(results: list[SearchResult], question: str) -> None:
-    retriever = get_retriever()
+    retriever = get_knowledge_base()
     entities = retriever.recognize_entities(question)
 
     st.markdown("## Search results")
@@ -172,7 +196,7 @@ def render_results(results: list[SearchResult], question: str) -> None:
 
     best = results[0].record
     with st.container(border=True):
-        st.caption("MOST RELEVANT ANSWER · MEDQUAD")
+        st.caption(f"MOST RELEVANT RESULT · {best.source.upper()}")
         st.markdown(f"### {best.question}")
         st.write(best.answer)
         st.divider()
@@ -216,8 +240,8 @@ st.markdown(
         <div class="hero-kicker">A medical information library</div>
         <div class="hero-title">Health answers, grounded in research.</div>
         <p class="hero-copy">
-            Search MedQuAD’s curated question-and-answer records for clear,
-            relevant information on conditions, symptoms, and treatments.
+        Search MedQuAD and periodically refreshed medical information from
+        trusted health organizations.
         </p>
     </div>
     """,
@@ -230,25 +254,26 @@ st.warning(
 )
 
 try:
-    retriever = get_retriever()
-except (FileNotFoundError, ValueError, OSError) as error:
-    st.error(f"Unable to load the local MedQuAD dataset: {error}")
+    retriever = get_knowledge_base()
+    start_source_scheduler()
+except (FileNotFoundError, ImportError, ValueError, OSError) as error:
+    st.error(f"Unable to initialize the medical knowledge base: {error}")
     st.stop()
 
 st.markdown(
     f"""
     <div class="stats-row">
         <div class="stat-cell">
-            <span class="stat-label">Answerable records</span>
-            <span class="stat-value">{len(retriever.records):,}</span>
+            <span class="stat-label">Knowledge chunks</span>
+            <span class="stat-value">{retriever.count:,}</span>
         </div>
         <div class="stat-cell">
             <span class="stat-label">Knowledge source</span>
-            <span class="stat-value">MedQuAD dataset</span>
+            <span class="stat-value">MedQuAD + trusted sources</span>
         </div>
         <div class="stat-cell">
             <span class="stat-label">Search approach</span>
-            <span class="stat-value">Text relevance</span>
+            <span class="stat-value">Sentence embeddings</span>
         </div>
     </div>
     """,
@@ -266,16 +291,16 @@ with st.form("medical_question_form", border=False):
     )
     st.caption("Try asking about symptoms, causes, diagnosis, or treatment.")
     submitted = st.form_submit_button(
-        "Search MedQuAD",
+        "Search medical knowledge",
         type="primary",
         use_container_width=True,
     )
 
 if submitted:
     if not question.strip():
-        st.info("Type a question above to search the MedQuAD records.")
+        st.info("Type a question above to search the medical knowledge base.")
     else:
-        with st.spinner("Searching MedQuAD..."):
+        with st.spinner("Searching medical knowledge..."):
             st.session_state["latest_question"] = question.strip()
             st.session_state["latest_results"] = retriever.search(question.strip())
 
@@ -289,11 +314,29 @@ if "latest_question" in st.session_state:
 with st.sidebar:
     st.markdown("## About this library")
     st.write(
-        "This app searches locally stored MedQuAD question-and-answer pairs. "
-        "Answers are retrieved from the dataset—not generated or independently "
-        "verified by the chatbot."
+        "This app retrieves information from MedQuAD and the configured trusted "
+        "health pages. Retrieved content is not independently verified."
     )
-    st.caption(f"{len(retriever.records):,} answerable records indexed")
+    st.caption(f"{retriever.count:,} knowledge chunks indexed")
+    updater = get_updater()
+    interval_hours = os.environ.get("UPDATE_INTERVAL_HOURS", "24")
+    if updater.source_urls:
+        st.caption(
+            f"{len(updater.source_urls)} trusted source(s); scheduled every "
+            f"{interval_hours} hour(s)."
+        )
+        if st.button("Update trusted sources now", use_container_width=True):
+            with st.spinner("Refreshing trusted medical sources..."):
+                update_result = updater.refresh()
+            if update_result.errors:
+                st.error("Some sources could not be updated:\n\n" + "\n".join(update_result.errors))
+            if update_result.updated_sources:
+                st.success(
+                    f"Updated {update_result.updated_sources} source(s); "
+                    f"indexed {update_result.indexed_chunks} chunks."
+                )
+    else:
+        st.info("Add HTTPS source URLs to trusted_sources.txt to enable updates.")
     st.divider()
     st.markdown("**About the dataset**")
     st.write(
